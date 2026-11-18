@@ -1,0 +1,25 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1",
+	"FriendlyName": "X-Ray Cube",
+	"Description": "Compute-shader cut-away volumes: drop a cube into a building and see through it. Cutter boxes are rasterised every frame into a world-anchored 3D signed distance field on the GPU, which any material samples to clip itself away inside the cube.",
+	"Category": "Rendering",
+	"CreatedBy": "Matin",
+	"CreatedByURL": "",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"SupportURL": "",
+	"CanContainContent": true,
+	"IsBetaVersion": false,
+	"IsExperimentalVersion": true,
+	"Installed": false,
+	"EnabledByDefault": true,
+	"Modules": [
+		{
+			"Name": "XRayCube",
+			"Type": "Runtime",
+			"LoadingPhase": "PostConfigInit"
+		}
+	]
+}

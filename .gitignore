@@ -1,0 +1,6 @@
+Binaries/
+Intermediate/
+.DS_Store
+*.blend1
+Saved/
+DerivedDataCache/

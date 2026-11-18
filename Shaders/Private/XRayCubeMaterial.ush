@@ -1,0 +1,67 @@
+// X-ray cube material helpers.
+//
+// Included from material Custom nodes via
+//     Include File Paths: /XRayCubeShaders/Private/XRayCubeMaterial.ush
+// so the HLSL lives in the repo as text instead of being buried in a .uasset.
+//
+// Material side of the contract (see Docs/05-material-wiring.md):
+//
+//   XRayField        Texture3D, RGBA16F. R = signed distance to the nearest
+//                    cutter (world units, negative inside), GBA = unit vector
+//                    pointing out of the cut.
+//   XRayFieldCenter  MPC vector. RGB = field centre (world), A = 1 once the
+//                    subsystem has written the field at least once.
+//   XRayFieldSize    MPC vector. RGB = world size of the volume,
+//                    A = MaxDistance (the value meaning "nowhere near a cutter").
+
+#pragma once
+
+// Returns float4(OpacityMask, EdgeGlow, Distance, Inside):
+//   OpacityMask  1 = keep the pixel, 0 = clip it (it is inside a cutter)
+//   EdgeGlow     0..1, peaks right at the cut face, fades out over GlowWidth
+//   Distance     signed distance to the cut, world units
+//   Inside       1 when this pixel is inside the simulated volume
+//
+// LocalPos   = AbsoluteWorldPosition - XRayFieldCenter.rgb   (do the LWC-safe
+//              subtraction in the graph, pass the small float3 result in here)
+// Cuttable   = 0 to opt a surface out (floors, furniture), 1 to let it be cut
+// GlowWidth  = world units the edge glow extends out from the cut face
+float4 XRayCube_Evaluate(Texture3D Field, SamplerState FieldSampler, float3 LocalPos,
+                         float4 FieldCenter, float4 FieldSize, float Cuttable, float GlowWidth)
+{
+	const float MaxDistance = max(FieldSize.w, 1.0f);
+	const float3 UVW = LocalPos / max(FieldSize.xyz, 1.0f) + 0.5f;
+	const bool bInside = all(UVW > 0.0f) && all(UVW < 1.0f);
+
+	float Distance = MaxDistance;
+	if (bInside && FieldCenter.w > 0.5f && Cuttable > 0.5f)
+	{
+		Distance = Field.SampleLevel(FieldSampler, UVW, 0).r;
+	}
+
+	const float Mask = Distance > 0.0f ? 1.0f : 0.0f;
+	float Glow = 1.0f - saturate(Distance / max(GlowWidth, 0.001f));
+	Glow = Mask * Glow * Glow;
+
+	return float4(Mask, Glow, Distance, bInside ? 1.0f : 0.0f);
+}
+
+// Thin, constant-pixel-width lines along the 12 edges of a box, for the cube's
+// own see-through "glass" material. LocalPos is the mesh's object-space
+// position (Local Position node), HalfSize its half extent in those units
+// (50 for /Engine/BasicShapes/Cube). fwidth keeps the line width in screen
+// pixels, so it stays crisp at any distance and any actor scale.
+float XRayCube_BoxEdge(float3 LocalPos, float HalfSize, float LinePixels)
+{
+	// 0 on a face, growing towards the centre - per axis.
+	const float3 D = 1.0f - saturate(abs(LocalPos) / max(HalfSize, 0.001f));
+
+	// An edge is where TWO axes are at a face at once, so look at the middle
+	// value of the three (the smallest is ~0 everywhere on the surface).
+	const float Lo = min(D.x, min(D.y, D.z));
+	const float Hi = max(D.x, max(D.y, D.z));
+	const float Mid = D.x + D.y + D.z - Lo - Hi;
+
+	const float Width = max(fwidth(Mid) * LinePixels, 1e-5f);
+	return 1.0f - smoothstep(0.0f, Width, Mid);
+}

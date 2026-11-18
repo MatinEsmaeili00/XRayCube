@@ -1,0 +1,159 @@
+// X-ray cube compute shaders.
+//
+// The field is a 3D texture covering a box of world space (FieldSize) centred
+// on the active cutters. Every voxel stores the signed distance, in world
+// units, to the union of all cutter boxes:
+//
+//      d < 0   inside a cutter  -> materials clip themselves away here
+//      d = 0   on a cutter face -> where the glowing cut edge is drawn
+//      d > 0   outside          -> geometry renders normally
+//
+// Two passes run whenever something changes:
+//
+//   XRayFieldUpdateCS   - reprojects last frame's field into this frame's
+//                         (scrolled) volume, rasterises every cutter box as an
+//                         exact oriented-box SDF, combines them with a smooth
+//                         union, then eases the stored field towards that
+//                         target so cuts open and heal over time instead of
+//                         popping.
+//
+//   XRayFieldGradientCS - packs distance + its normalised gradient into the
+//                         RGBA16F volume materials sample (R = distance,
+//                         GBA = direction pointing out of the cut).
+//
+// Why a distance field instead of a 0/1 mask? Trilinear filtering of a true
+// SDF reconstructs a flat face *exactly* - the distance to a plane is a linear
+// function, and linear interpolation of a linear function is exact. So a
+// 12.5 cm voxel grid still gives razor-sharp, perfectly flat cut faces; only
+// the box's edges and corners round off by about one voxel. A 0/1 mask at the
+// same resolution would give staircase edges.
+
+#include "/Engine/Private/Common.ush"
+
+// Must match FXRayCutterGPU in XRayCubeComputePass.h exactly (4 x float4).
+struct FXRayCutterGPU
+{
+	float3 Center;			// field-local, world units
+	float  CornerRadius;	// world units, rounds the box's edges
+	float3 AxisX;			// unit box axes in world orientation
+	float  HalfX;			// half extents, world units
+	float3 AxisY;
+	float  HalfY;
+	float3 AxisZ;
+	float  HalfZ;
+};
+
+// Exact signed distance to an oriented, optionally rounded box.
+// (Classic Inigo Quilez box SDF, applied in the box's own frame.)
+float SdOrientedBox(float3 P, FXRayCutterGPU C)
+{
+	const float3 Rel = P - C.Center;
+	const float3 Q = float3(dot(Rel, C.AxisX), dot(Rel, C.AxisY), dot(Rel, C.AxisZ));
+	const float3 HalfSize = float3(C.HalfX, C.HalfY, C.HalfZ) - C.CornerRadius;
+	const float3 A = abs(Q) - HalfSize;
+	return length(max(A, 0.0f)) + min(max(A.x, max(A.y, A.z)), 0.0f) - C.CornerRadius;
+}
+
+// Polynomial smooth minimum. K is the blend radius in world units; K = 0 is a
+// hard union. Lets overlapping cubes merge into one soft-edged cavity.
+float SmoothMin(float A, float B, float K)
+{
+	if (K <= 0.0f)
+	{
+		return min(A, B);
+	}
+	const float H = saturate(0.5f + 0.5f * (B - A) / K);
+	return lerp(B, A, H) - K * H * (1.0f - H);
+}
+
+// ---------------------------------------------------------------------------
+// Pass 1: update
+// ---------------------------------------------------------------------------
+
+Texture3D<float>					PrevField;
+RWTexture3D<float>					OutField;
+StructuredBuffer<FXRayCutterGPU>	Cutters;
+
+int3	FieldResolution;
+float3	FieldSize;			// world units covered by the whole volume
+int3	PrevVoxelOffset;	// (NewCentre - OldCentre) / VoxelSize - always whole voxels
+int		NumCutters;
+float	MaxDistance;		// distances are clamped to +-MaxDistance; +MaxDistance = "nothing here"
+float	BlendRadius;
+float	BlendAlpha;			// 1 - exp(-Response * dt); 1 = snap straight to the target
+float	ClearMask;			// 0 on the first frame: ignore whatever garbage PrevField holds
+
+[numthreads(THREADS_X, THREADS_Y, THREADS_Z)]
+void XRayFieldUpdateCS(uint3 DTid : SV_DispatchThreadID)
+{
+	const int3 Voxel = int3(DTid);
+	if (any(Voxel >= FieldResolution))
+	{
+		return;
+	}
+
+	// Voxel centre relative to the field centre, in world units. Field-local
+	// space keeps values small however far from the origin the level sits.
+	const float3 UVW = (float3(Voxel) + 0.5f) / float3(FieldResolution);
+	const float3 LocalPos = (UVW - 0.5f) * FieldSize;
+
+	// Target: the exact distance to the union of all cutters, right now.
+	float Target = MaxDistance;
+	for (int i = 0; i < NumCutters; ++i)
+	{
+		Target = SmoothMin(Target, SdOrientedBox(LocalPos, Cutters[i]), BlendRadius);
+	}
+	Target = clamp(Target, -MaxDistance, MaxDistance);
+
+	// Where this same world position sat in last frame's volume. The C++ side
+	// only ever moves the field centre in whole-voxel steps, so this is an
+	// exact integer Load - no resampling, so repeated scrolling never blurs
+	// the stored field the way a fractional bilinear reprojection would.
+	float Prev = MaxDistance;
+	const int3 PrevVoxel = Voxel + PrevVoxelOffset;
+	if (ClearMask > 0.0f && all(PrevVoxel >= 0) && all(PrevVoxel < FieldResolution))
+	{
+		Prev = PrevField.Load(int4(PrevVoxel, 0));
+	}
+
+	// Exponential ease towards the target. Frame-rate independent because
+	// BlendAlpha is derived from DeltaTime on the CPU. Interpolating two
+	// distance fields morphs one shape into the other: a fresh cut grows out
+	// from the cube's middle, an abandoned one shrinks closed.
+	OutField[Voxel] = lerp(Prev, Target, BlendAlpha);
+}
+
+// ---------------------------------------------------------------------------
+// Pass 2: gradient
+// ---------------------------------------------------------------------------
+
+Texture3D<float>	Field;
+RWTexture3D<float4>	OutFieldData;
+
+[numthreads(THREADS_X, THREADS_Y, THREADS_Z)]
+void XRayFieldGradientCS(uint3 DTid : SV_DispatchThreadID)
+{
+	const int3 Voxel = int3(DTid);
+	if (any(Voxel >= FieldResolution))
+	{
+		return;
+	}
+
+	const int3 MaxVoxel = FieldResolution - 1;
+	const float D  = Field.Load(int4(Voxel, 0));
+	const float DX0 = Field.Load(int4(clamp(Voxel - int3(1, 0, 0), 0, MaxVoxel), 0));
+	const float DX1 = Field.Load(int4(clamp(Voxel + int3(1, 0, 0), 0, MaxVoxel), 0));
+	const float DY0 = Field.Load(int4(clamp(Voxel - int3(0, 1, 0), 0, MaxVoxel), 0));
+	const float DY1 = Field.Load(int4(clamp(Voxel + int3(0, 1, 0), 0, MaxVoxel), 0));
+	const float DZ0 = Field.Load(int4(clamp(Voxel - int3(0, 0, 1), 0, MaxVoxel), 0));
+	const float DZ1 = Field.Load(int4(clamp(Voxel + int3(0, 0, 1), 0, MaxVoxel), 0));
+
+	// Central differences, scaled by voxel size so the gradient is per world
+	// unit (only its direction is stored, but anisotropic voxels would skew it).
+	const float3 VoxelSize = FieldSize / float3(FieldResolution);
+	const float3 Gradient = float3(DX1 - DX0, DY1 - DY0, DZ1 - DZ0) / (2.0f * VoxelSize);
+	const float GradLen = length(Gradient);
+	const float3 Normal = GradLen > 1e-5f ? Gradient / GradLen : float3(0.0f, 0.0f, 1.0f);
+
+	OutFieldData[Voxel] = float4(D, Normal);
+}
