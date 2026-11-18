@@ -14,7 +14,11 @@ editor. Newest work at the top of each section.
 - [x] `UXRayCutterComponent` (box component that cuts) + `AXRayCubeActor`
 - [x] Material HLSL in `Shaders/Private/XRayCubeMaterial.ush`
 - [x] Builds cleanly against UE 5.8 (Mac, arm64)
-- [ ] Restart editor so the plugin loads; check the global shaders compile
+- [x] Shaders compile under DXC SM6 (`Tools/ShaderCheck/check_shaders.sh`):
+      both compute kernels + the material helpers
+- [x] Apartment imported headless (ImportAssets commandlet, Interchange) into
+      `/XRayCube/Apartment/` as 4 static meshes
+- [ ] Restart editor so the plugin loads; check global shaders compile for Metal
 - [ ] Plugin content: `MPC_XRayField`, `RTV_XRayField` (128×128×64 RGBA16F, UAV)
 - [ ] `M_XRayCutaway` master material (masked, two-sided, edge glow) + instances
 - [ ] `M_XRayCube` glass material for the cube (fresnel + edge lines)
@@ -26,10 +30,10 @@ editor. Newest work at the top of each section.
 
 ## Milestone 2: documentation
 
-- [ ] README: what it is, quick start, how it works
-- [ ] Docs/01 Architecture (why a 3D SDF, why scrolling + voxel snapping)
-- [ ] Docs/02 GPU compute pipeline (RDG passes, UAVs, 3D thread groups)
-- [ ] Docs/03 Shader walkthrough (box SDF, smooth union, temporal ease, gradient)
+- [ ] README: what it is, quick start, how it works (first pass done)
+- [x] Docs/01 Architecture (why a 3D SDF, why scrolling + voxel snapping)
+- [x] Docs/02 GPU compute pipeline (RDG passes, UAVs, 3D thread groups)
+- [x] Docs/03 Shader walkthrough (box SDF, smooth union, temporal ease, gradient)
 - [ ] Docs/04 C++ reference
 - [ ] Docs/05 Material wiring (Custom node + include, MPC, LWC-safe subtraction)
 - [ ] Docs/06 Troubleshooting & tuning
