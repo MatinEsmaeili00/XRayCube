@@ -96,6 +96,10 @@ private:
 	void EnsureRenderTargets();
 	void ReleaseRenderTargets();
 	void PrepareOutputAsset(UTextureRenderTargetVolume* Asset);
+#if WITH_EDITOR
+	/** Creates the configured output asset when it doesn't exist yet (editor only, marks it dirty). */
+	UTextureRenderTargetVolume* CreateOutputAsset(const FSoftObjectPath& Path) const;
+#endif
 	void PushMaterialParameters();
 	bool IsSuspendedForPIE() const;
 

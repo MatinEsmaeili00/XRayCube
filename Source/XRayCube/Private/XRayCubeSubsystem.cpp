@@ -13,6 +13,12 @@
 #include "XRayCubeSettings.h"
 #include "XRayCutterComponent.h"
 
+#if WITH_EDITOR
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "Misc/PackageName.h"
+#include "UObject/Package.h"
+#endif
+
 void UXRayCubeSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
@@ -35,6 +41,12 @@ void UXRayCubeSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	if (!Settings.FieldRenderTarget.IsNull())
 	{
 		ConfiguredOutputAsset = Settings.FieldRenderTarget.LoadSynchronous();
+#if WITH_EDITOR
+		if (!ConfiguredOutputAsset)
+		{
+			ConfiguredOutputAsset = CreateOutputAsset(Settings.FieldRenderTarget.ToSoftObjectPath());
+		}
+#endif
 		if (ConfiguredOutputAsset)
 		{
 			PrepareOutputAsset(ConfiguredOutputAsset);
@@ -202,15 +214,60 @@ void UXRayCubeSubsystem::PrepareOutputAsset(UTextureRenderTargetVolume* Asset)
 			*Asset->GetName());
 	}
 
-	if (!Asset->bCanCreateUAV)
+	// bCanCreateUAV isn't serialised; a saved volume target keeps the flag in
+	// bSupportsUAV, which CreateResource() copies across.
+	if (!Asset->bSupportsUAV || !Asset->bCanCreateUAV)
 	{
 		UE_LOG(LogXRayCube, Warning,
-			TEXT("X-ray field render target %s did not have Can Create UAV set; enabling it for this session."),
+			TEXT("X-ray field render target %s did not have Supports UAV set; enabling it for this session."),
 			*Asset->GetName());
+		Asset->bSupportsUAV = true;
 		Asset->bCanCreateUAV = true;
 		Asset->UpdateResource();
 	}
 }
+
+#if WITH_EDITOR
+UTextureRenderTargetVolume* UXRayCubeSubsystem::CreateOutputAsset(const FSoftObjectPath& Path) const
+{
+	// Only in an interactive editor: a cooked game or a commandlet must never
+	// invent content.
+	if (!GIsEditor || IsRunningCommandlet() || Path.IsNull())
+	{
+		return nullptr;
+	}
+
+	const FString PackageName = Path.GetLongPackageName();
+	FString Filename;
+	if (!FPackageName::TryConvertLongPackageNameToFilename(PackageName, Filename, FPackageName::GetAssetPackageExtension())
+		|| FPackageName::DoesPackageExist(PackageName))
+	{
+		// Unmounted root, or the package exists on disk and simply failed to
+		// load: leave it alone and let the caller warn.
+		return nullptr;
+	}
+
+	UPackage* Package = CreatePackage(*PackageName);
+	UTextureRenderTargetVolume* Asset = NewObject<UTextureRenderTargetVolume>(
+		Package, FName(*Path.GetAssetName()), RF_Public | RF_Standalone | RF_Transactional);
+
+	Asset->ClearColor     = FLinearColor(MaxDistance, 0.0f, 0.0f, 0.0f);
+	Asset->OverrideFormat = PF_FloatRGBA;
+	Asset->bHDR           = true;
+	Asset->bSupportsUAV   = true;
+	Asset->bCanCreateUAV  = true;
+	Asset->Init(FieldResolution.X, FieldResolution.Y, FieldResolution.Z, PF_FloatRGBA);
+	Asset->UpdateResourceImmediate(true);
+
+	FAssetRegistryModule::AssetCreated(Asset);
+	Package->MarkPackageDirty();
+
+	UE_LOG(LogXRayCube, Log,
+		TEXT("Created X-ray field render target %s (%dx%dx%d RGBA16F). Save it so materials can reference it."),
+		*PackageName, FieldResolution.X, FieldResolution.Y, FieldResolution.Z);
+	return Asset;
+}
+#endif
 
 void UXRayCubeSubsystem::ReleaseRenderTargets()
 {
@@ -362,13 +419,17 @@ void UXRayCubeSubsystem::Tick(float DeltaTime)
 
 	if (CutterBounds.IsValid && !bWarnedOutOfBounds)
 	{
-		const FVector Needed = CutterBounds.GetSize() + FVector(2.0f * MaxDistance);
+		// Only the cutters themselves have to fit (plus a voxel each side so
+		// trilinear sampling sees "outside" past every face). Beyond the field
+		// the material reads MaxDistance, i.e. "not cut", which is exactly
+		// right everywhere except inside a cutter.
+		const FVector Needed = CutterBounds.GetSize() + 2.0 * VoxelSize;
 		if (Needed.X > FieldSizeWorld.X || Needed.Y > FieldSizeWorld.Y || Needed.Z > FieldSizeWorld.Z)
 		{
 			bWarnedOutOfBounds = true;
 			UE_LOG(LogXRayCube, Warning,
-				TEXT("X-ray cutters span %.0fx%.0fx%.0f uu (plus MaxDistance margin) but the field only covers ")
-				TEXT("%.0fx%.0fx%.0f; cuts will stop at the field's edge. Raise FieldSizeWorld in Project Settings."),
+				TEXT("X-ray cutters span %.0fx%.0fx%.0f uu but the field only covers %.0fx%.0fx%.0f; ")
+				TEXT("cuts will stop at the field's edge. Raise FieldSizeWorld in Project Settings."),
 				CutterBounds.GetSize().X, CutterBounds.GetSize().Y, CutterBounds.GetSize().Z,
 				FieldSizeWorld.X, FieldSizeWorld.Y, FieldSizeWorld.Z);
 		}

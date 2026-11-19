@@ -28,5 +28,11 @@ public class XRayCube : ModuleRules
 				"RenderCore", // FGlobalShader, RDG, FComputeShaderUtils
 			}
 		);
+
+		if (Target.bBuildEditor)
+		{
+			// Editor-only bootstrap of the field render target asset.
+			PrivateDependencyModuleNames.Add("AssetRegistry");
+		}
 	}
 }

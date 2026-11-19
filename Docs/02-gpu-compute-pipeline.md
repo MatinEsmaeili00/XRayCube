@@ -48,6 +48,12 @@ All three are `UTextureRenderTargetVolume`s with `bCanCreateUAV = true`.
 `FTextureRenderTargetVolumeResource::InitRHI` adds `TexCreate_UAV` when that
 flag is set, so a compute shader can write into them directly.
 
+`bCanCreateUAV` is a plain bitfield on `UTextureRenderTarget`, **not** a
+saved property. A saved volume asset keeps the flag in `bSupportsUAV`
+(*Supports UAV* in the editor), which `UTextureRenderTargetVolume::CreateResource()`
+copies into `bCanCreateUAV`. The transient ping-pong targets set
+`bCanCreateUAV` directly. The `RTV_XRayField` asset has `bSupportsUAV` saved.
+
 **Why R32F for the state but RGBA16F for the output?** The state is eased
 towards its target exponentially: `lerp(prev, target, α)` with a small α. In
 half precision those small steps round to zero and the value stalls short of

@@ -4,6 +4,8 @@ An Unreal Engine 5 plugin for **compute-shader cut-away volumes**: drop a cube
 into a building, move it around, and every wall and ceiling inside the cube
 disappears so you can see through the apartment.
 
+![The X-ray cube cutting away the corner of the demo apartment](Docs/Images/hero-corner-cutaway.jpg)
+
 Built in the same low-level style as
 [GPULab](https://github.com/MatinEsmaeili00/GPULab) and
 [SnowDeformation](https://github.com/MatinEsmaeili00/SnowDeformation)
@@ -11,7 +13,26 @@ Built in the same low-level style as
 a world subsystem, ping-pong persistent state), taken from a 2D height field
 to a **3D signed distance field**.
 
-Developed against **UE 5.8**. Work in progress: see [TODO.md](TODO.md).
+Developed against **UE 5.8** on macOS (Metal SM6). Status and next steps:
+[TODO.md](TODO.md).
+
+## Quick start
+
+1. Copy (or clone) this folder to `<YourProject>/Plugins/XRayCube`. Your
+   project needs to be a C++ project, or build the plugin once from a C++ one.
+2. Open the project; the plugin compiles and is enabled by default.
+3. Open **`/XRayCube/Maps/XRayDemo`** (Content Browser › *Plugins* ›
+   *XRayCube Content* › *Maps*; turn on *Show Plugin Content* if you don't see it).
+4. Select the **XRayCube** actor and drag it around. The cut follows it live in
+   the editor viewport. Scale it, rotate it, add more. Press **Play** and it
+   works the same in game.
+
+To use it in your own level: give your walls an instance of
+**`M_XRayCutaway`** (or add its Custom node to your materials, see
+[Material wiring](Docs/05-material-wiring.md)), then place an
+**X Ray Cube Actor**, or add an **X-Ray Cutter** component to any actor.
+
+![The cut follows the cube when it moves and rotates](Docs/Images/rotated-cut.jpg)
 
 ## How it works
 
@@ -42,6 +63,18 @@ The material does **one** 3D texture fetch per pixel no matter how many cubes
 there are. The compute shader does the per-cutter work once per voxel, and only
 when something has changed.
 
+## Documentation
+
+| | |
+|---|---|
+| [1. Architecture](Docs/01-architecture.md) | why a 3D distance field, scrolling + voxel snapping, the idle skip |
+| [2. GPU compute pipeline](Docs/02-gpu-compute-pipeline.md) | RDG passes, UAVs on volume RTs, 3D thread groups |
+| [3. Shader walkthrough](Docs/03-shader-walkthrough.md) | box SDF, smooth union, reprojection, easing, gradient |
+| [4. C++ reference](Docs/04-cpp-reference.md) | every class, Blueprint API, lifecycle |
+| [5. Material wiring](Docs/05-material-wiring.md) | Custom node + include, LWC, making materials cuttable |
+| [6. Apartment & Blender](Docs/06-apartment-blender.md) | the procedural apartment, units/axes, importing |
+| [7. Tuning & troubleshooting](Docs/07-tuning-troubleshooting.md) | voxel size, response, every warning explained |
+
 ## Layout
 
 ```
@@ -56,9 +89,13 @@ XRayCube/
 │   ├── Public/XRayCubeSubsystem.h          - UTickableWorldSubsystem that owns the field
 │   ├── Public/XRayCutterComponent.h        - box component that cuts
 │   └── Public/XRayCubeActor.h              - the cube: cutter + glass mesh (+ follow-camera mode)
-├── Content/                                - MPC, volume RT, materials, apartment, demo map
+├── Content/
+│   ├── Materials/                          - RTV_XRayField, MPC_XRayField, M_XRayCutaway, M_XRayCube
+│   ├── Apartment/                          - SM_Apartment_* meshes + MI_* surface instances
+│   └── Maps/XRayDemo                       - demo level
 ├── Art/Apartment.fbx, Apartment.blend      - demo apartment source art
 ├── Tools/Blender/build_apartment.py        - regenerates the apartment procedurally
+├── Tools/ShaderCheck/                      - offline DXC compile of every shader entry point
 └── Docs/                                   - deep-dive documentation
 ```
 
